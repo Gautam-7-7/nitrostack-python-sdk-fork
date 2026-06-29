@@ -106,7 +106,27 @@ def tool(
             metadata=metadata,
             is_initial=getattr(func, "_mcp_is_initial", False)
         )
+        # Check if function already had a widget decorator applied first
+        widget_route = getattr(func, "_mcp_widget", None)
+        if widget_route:
+            config.metadata["ui/template"] = widget_route
+            config.metadata["ui"] = {"resourceUri": widget_route}
+            config.metadata["openai/outputTemplate"] = widget_route
+            
         func._mcp_tool_config = config
+        return func
+    return decorator
+
+def widget(route_path: str):
+    """
+    Decorator to associate a UI widget route with a tool.
+    """
+    def decorator(func: Callable):
+        func._mcp_widget = route_path
+        if hasattr(func, "_mcp_tool_config"):
+            func._mcp_tool_config.metadata["ui/template"] = route_path
+            func._mcp_tool_config.metadata["ui"] = {"resourceUri": route_path}
+            func._mcp_tool_config.metadata["openai/outputTemplate"] = route_path
         return func
     return decorator
 

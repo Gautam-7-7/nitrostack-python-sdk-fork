@@ -37,7 +37,7 @@ class InitialToolController:
 class TestInitialModule:
     pass
 
-async def test_initial_tool_hook():
+async def _test_initial_tool_hook():
     print("Testing @initial_tool auto-call hook...")
     
     # Create testing harness
@@ -65,5 +65,8 @@ async def test_initial_tool_hook():
     assert ExecutionState.called is True
     print("Test passed! @initial_tool was automatically called when InitializedNotification arrived.")
 
+def test_initial_tool_hook():
+    asyncio.run(_test_initial_tool_hook())
+
 if __name__ == "__main__":
-    asyncio.run(test_initial_tool_hook())
+    test_initial_tool_hook()

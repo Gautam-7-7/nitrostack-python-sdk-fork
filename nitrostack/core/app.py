@@ -485,6 +485,12 @@ class McpApplication:
             "task_support": tool_config.task_support,
             **(tool_config.metadata or {})
         }
+        widget_route = getattr(method, "_mcp_widget", None)
+        if widget_route:
+            meta["ui/template"] = widget_route
+            meta["ui"] = {"resourceUri": widget_route}
+            meta["openai/outputTemplate"] = widget_route
+
         if tool_config.invocation:
             meta["openai/toolInvocation/invoking"] = tool_config.invocation.invoking
             meta["openai/toolInvocation/invoked"] = tool_config.invocation.invoked

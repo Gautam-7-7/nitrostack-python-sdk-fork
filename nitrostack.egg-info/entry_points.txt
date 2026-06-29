@@ -1,3 +1,0 @@
-[console_scripts]
-nitrostack-py = nitrostack.cli.main:main
-nitrostack-studio = nitrostack.studio:start_server_cli

@@ -41,7 +41,7 @@ class AsyncTaskController:
 class TestTasksModule:
     pass
 
-async def test_all_tasks():
+async def _test_all_tasks():
     print("Initializing NitroTestingModule with TestTasksModule...")
     harness = await NitroTestingModule.create(TestTasksModule)
     
@@ -172,5 +172,8 @@ async def test_all_tasks():
 
     print("\nAll task registry and protocol tests passed successfully!")
 
+def test_all_tasks():
+    asyncio.run(_test_all_tasks())
+
 if __name__ == "__main__":
-    asyncio.run(test_all_tasks())
+    test_all_tasks()
