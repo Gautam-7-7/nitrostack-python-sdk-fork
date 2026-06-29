@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nitrostack"
-version = "0.3.1"
+version = "0.3.2"
 description = "NitroStack Python SDK — A Python-idiomatic port of the NitroStack MCP framework"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,7 +24,7 @@ nitrostack-studio = "nitrostack.studio:start_server_cli"
 include = ["nitrostack*"]
 
 [tool.setuptools.package-data]
-nitrostack = ["static/*"]
+nitrostack = ["static/*", "templates/**/*"]
 
 [tool.ruff]
 line-length = 100

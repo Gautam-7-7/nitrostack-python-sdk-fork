@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from nitrostack import DIContainer, ExecutionContext, OAuthGuard
 from nitrostack.auth.oauth import OAuthModule, OAuthService
 
-async def test_oauth_guard_validation():
+async def _test_oauth_guard_validation():
     print("Testing OAuthGuard and OAuth 2.1 validation flow...")
 
     # 1. Setup DIContainer and OAuthModule
@@ -93,5 +93,8 @@ async def test_oauth_guard_validation():
 
     print("Success! OAuthGuard and OAuth 2.1 token validations work perfectly.")
 
+def test_oauth_guard_validation():
+    asyncio.run(_test_oauth_guard_validation())
+
 if __name__ == "__main__":
-    asyncio.run(test_oauth_guard_validation())
+    test_oauth_guard_validation()
