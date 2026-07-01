@@ -22,6 +22,10 @@ class DependencyResolutionError(DIError):
     """Raised when a dependency cannot be resolved by the DI container."""
     pass
 
+class CircularDependencyError(DIError):
+    """Raised when a circular dependency is detected."""
+    pass
+
 class ConfigurationError(Exception):
     """Raised when configuration validation fails."""
     pass
