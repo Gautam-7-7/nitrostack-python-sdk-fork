@@ -197,14 +197,25 @@ async def run_pipeline(
             current_args[0] = val
 
         # 3. Chain Middleware and Interceptors
-        async def call_target():
+        async def call_target(ctx):
+            target_args = list(current_args)
+            target_kwargs = dict(kwargs)
+
+            for idx, arg in enumerate(target_args):
+                if isinstance(arg, ExecutionContext) or type(arg).__name__ == "ExecutionContext":
+                    target_args[idx] = ctx
+            
+            for k, v in target_kwargs.items():
+                if isinstance(v, ExecutionContext) or type(v).__name__ == "ExecutionContext":
+                    target_kwargs[k] = ctx
+
             import inspect
             if inspect.ismethod(handler):
-                return await handler(*current_args, **kwargs)
+                return await handler(*target_args, **target_kwargs)
             elif handler_instance is not None:
-                return await handler(handler_instance, *current_args, **kwargs)
+                return await handler(handler_instance, *target_args, **target_kwargs)
             else:
-                return await handler(*current_args, **kwargs)
+                return await handler(*target_args, **target_kwargs)
 
         # We construct the next chain backwards:
         # Middleware -> Interceptors -> Handler
@@ -212,17 +223,27 @@ async def run_pipeline(
         for interceptor_cls in reversed(interceptors):
             interceptor = container.resolve(interceptor_cls)
             def make_interceptor_next(nxt):
-                return lambda: interceptor.intercept(context, nxt)
+                async def step(ctx):
+                    async def call_next(*a, **k):
+                        passed_ctx = a[0] if a else ctx
+                        return await nxt(passed_ctx)
+                    return await interceptor.intercept(ctx, call_next)
+                return step
             current_next = make_interceptor_next(current_next)
 
         for middleware_cls in reversed(middleware):
             mw = container.resolve(middleware_cls)
             def make_middleware_next(nxt):
-                return lambda: mw.use(context, nxt)
+                async def step(ctx):
+                    async def call_next(*a, **k):
+                        passed_ctx = a[0] if a else ctx
+                        return await nxt(passed_ctx)
+                    return await mw.use(ctx, call_next)
+                return step
             current_next = make_middleware_next(current_next)
 
         # Execute the chain
-        return await current_next()
+        return await current_next(context)
 
     # Wrap the entire flow in Exception Filters
     try:

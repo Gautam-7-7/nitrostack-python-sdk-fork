@@ -71,8 +71,8 @@ class PromptConfig:
 
 def tool(
     name: str,
-    description: str,
-    input_schema: Any,
+    description: Optional[str] = None,
+    input_schema: Optional[Any] = None,
     title: Optional[str] = None,
     output_schema: Optional[Any] = None,
     annotations: Optional[ToolAnnotations] = None,
@@ -91,11 +91,17 @@ def tool(
         metadata = {}
 
     def decorator(func: Callable):
+        desc = description
+        if not desc and func.__doc__:
+            desc = func.__doc__.strip()
+        if not desc:
+            desc = ""
+
         # Attach or update tool config
         config = ToolConfig(
             name=name,
             title=title,
-            description=description,
+            description=desc,
             input_schema=input_schema,
             output_schema=output_schema,
             annotations=annotations,
@@ -143,7 +149,7 @@ def initial_tool(func: Callable):
 def resource(
     uri: str,
     name: str,
-    description: str,
+    description: Optional[str] = None,
     title: Optional[str] = None,
     mime_type: Optional[str] = None,
     size: Optional[int] = None,
@@ -159,10 +165,16 @@ def resource(
         metadata = {}
 
     def decorator(func: Callable):
+        desc = description
+        if not desc and func.__doc__:
+            desc = func.__doc__.strip()
+        if not desc:
+            desc = ""
+
         config = ResourceConfig(
             uri=uri,
             name=name,
-            description=description,
+            description=desc,
             title=title,
             mime_type=mime_type,
             size=size,
@@ -175,7 +187,7 @@ def resource(
 
 def prompt(
     name: str,
-    description: str,
+    description: Optional[str] = None,
     arguments: Optional[List[PromptArgument]] = None,
 ):
     """
@@ -185,9 +197,15 @@ def prompt(
         arguments = []
 
     def decorator(func: Callable):
+        desc = description
+        if not desc and func.__doc__:
+            desc = func.__doc__.strip()
+        if not desc:
+            desc = ""
+
         config = PromptConfig(
             name=name,
-            description=description,
+            description=desc,
             arguments=arguments
         )
         func._mcp_prompt_config = config

@@ -841,10 +841,16 @@ def print_banner():
 ╚══════════════════════════════════════════════════════════╝\033[0m"""
     print(banner)
 
-def init_project(name: str, template: str = None):
+def init_project(name: str = None, template: str = None, description: str = None, author: str = None, skip_install: bool = False):
     print_banner()
     
-    # 1. Overwrite check
+    # 1. Prompt for project name if not provided
+    if not name:
+        sys.stdout.write("\033[32m? \033[1;37mProject name:\033[0m [my-mcp-server]: ")
+        sys.stdout.flush()
+        name = sys.stdin.readline().strip() or "my-mcp-server"
+        
+    # Overwrite check
     if os.path.exists(name):
         sys.stdout.write(f"\033[32m? \033[1;37mDirectory '{name}' already exists. Overwrite?\033[0m (Yes/No) [No]: ")
         sys.stdout.flush()
@@ -887,13 +893,15 @@ def init_project(name: str, template: str = None):
             template = "flight-booking"
                 
     # 3. Description and Author
-    sys.stdout.write("\033[32m? \033[1;37mDescription:\033[0m [My awesome MCP server]: ")
-    sys.stdout.flush()
-    description = sys.stdin.readline().strip() or "My awesome MCP server"
+    if description is None:
+        sys.stdout.write("\033[32m? \033[1;37mDescription:\033[0m [My awesome MCP server]: ")
+        sys.stdout.flush()
+        description = sys.stdin.readline().strip() or "My awesome MCP server"
     
-    sys.stdout.write("\033[32m? \033[1;37mAuthor:\033[0m [developer]: ")
-    sys.stdout.flush()
-    author = sys.stdin.readline().strip() or "developer"
+    if author is None:
+        sys.stdout.write("\033[32m? \033[1;37mAuthor:\033[0m [developer]: ")
+        sys.stdout.flush()
+        author = sys.stdin.readline().strip() or "developer"
     
     # 4. Copy template directory
     import nitrostack
@@ -907,7 +915,6 @@ def init_project(name: str, template: str = None):
         
     shutil.copytree(template_src_dir, name)
     print("\n\033[32m✓\033[0m Project created")
-    print("\033[32m✓\033[0m Dependencies installed")
     
     # 5. Update .env file
     env_path = os.path.join(name, ".env")
@@ -945,16 +952,19 @@ def init_project(name: str, template: str = None):
             pass
 
     # 7. Run npm install inside widgets directory
-    widgets_dir = os.path.join(name, "src", "widgets")
-    if os.path.exists(widgets_dir):
-        print("Installing widget dependencies...")
-        try:
-            subprocess.run(["npm", "--version"], shell=True, capture_output=True, check=True)
-            subprocess.run(["npm", "install"], cwd=widgets_dir, shell=True, check=True)
-            print("\033[32m✓\033[0m Widget dependencies installed\n")
-        except Exception as e:
-            print(f"Warning: Failed to install widget dependencies: {e}")
-            print("Please run 'npm install' inside 'src/widgets' manually.\n")
+    if not skip_install:
+        widgets_dir = os.path.join(name, "src", "widgets")
+        if os.path.exists(widgets_dir):
+            print("Installing widget dependencies...")
+            try:
+                subprocess.run(["npm", "--version"], shell=True, capture_output=True, check=True)
+                subprocess.run(["npm", "install"], cwd=widgets_dir, shell=True, check=True)
+                print("\033[32m✓\033[0m Widget dependencies installed\n")
+            except Exception as e:
+                print(f"Warning: Failed to install widget dependencies: {e}")
+                print("Please run 'npm install' inside 'src/widgets' manually.\n")
+    else:
+        print("Skipping dependencies installation (--skip-install)\n")
             
     # Success Card
     abs_path = os.path.abspath(name)
@@ -975,14 +985,17 @@ def init_project(name: str, template: str = None):
         print("    See \033[34mOAUTH_SETUP.md\033[0m for provider guides")
     else:
         print(" 2. Configure environment variables in \033[34m.env\033[0m")
-    print(" 3. Start development server: \033[34mnitrostack-py dev\033[0m (or `python -m nitrostack.cli.main dev`)")
-    print(" 4. Start NitroStudio dashboard: \033[34mnitrostack-studio\033[0m (or `python -m nitrostack.studio`)")
+    if skip_install:
+        print(" 3. Install dependencies: \033[34mnitrostack-py install\033[0m")
+        print(" 4. Start development server: \033[34mnitrostack-py dev\033[0m")
+    else:
+        print(" 3. Start development server: \033[34mnitrostack-py dev\033[0m (or `python -m nitrostack.cli.main dev`)")
+        print(" 4. Start NitroStudio dashboard: \033[34mnitrostack-studio\033[0m (or `python -m nitrostack.studio`)")
     print("\nHappy coding! 🚀\n")
 
-def run_dev():
-    target = "main.py"
+def run_dev(target="main.py", port=3001):
     if not os.path.exists(target):
-        print("Error: main.py not found in current directory.")
+        print(f"Error: {target} not found in current directory.")
         sys.exit(1)
         
     print(f"Starting hot-reload development server for {target}...")
@@ -992,11 +1005,11 @@ def run_dev():
     # Check if Next.js widgets are present
     widgets_dir = os.path.join(os.getcwd(), "src", "widgets")
     if os.path.exists(widgets_dir) and os.path.exists(os.path.join(widgets_dir, "package.json")):
-        print("Starting widget development server on port 3001...")
+        print(f"Starting widget development server on port {port}...")
         try:
-            # Spawn npm run dev -- --port 3001
+            # Spawn npm run dev -- --port <port>
             widgets_process = subprocess.Popen(
-                ["npm", "run", "dev", "--", "--port", "3001"],
+                ["npm", "run", "dev", "--", "--port", str(port)],
                 cwd=widgets_dir,
                 shell=True
             )
@@ -1101,41 +1114,520 @@ def run_dev():
         print("\nStopping development server...")
         cleanup()
 
-def run_start():
-    target = "main.py"
+def run_start(target="main.py", port=None):
     if not os.path.exists(target):
-        print("Error: main.py not found in current directory.")
+        print(f"Error: {target} not found in current directory.")
         sys.exit(1)
     
     print(f"Starting production server for {target}...")
     env = os.environ.copy()
     env["PYTHONPATH"] = os.path.abspath(".")
+    if port is not None:
+        env["PORT"] = str(port)
     try:
         subprocess.run([sys.executable, target], env=env)
     except KeyboardInterrupt:
         print("\nStopping server...")
 
-def generate_tool(name: str):
-    filename = f"{name}_tool.py"
-    if os.path.exists(filename):
-        print(f"Error: File '{filename}' already exists.")
-        sys.exit(1)
-    camel_name = "".join(part.capitalize() for part in name.split("_"))
-    content = TOOL_TEMPLATE.format(name=name, camel_name=camel_name)
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(content)
-    print(f"Generated tool boilerplate in '{filename}'")
+def run_install(skip_widgets=False, production=False):
+    print("Installing dependencies...")
+    # 1. Install Python dependencies in current directory
+    if os.path.exists("requirements.txt"):
+        print("Installing Python dependencies from requirements.txt...")
+        try:
+            subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], check=True)
+            print("\033[32m✓\033[0m Python dependencies installed")
+        except Exception as e:
+            print(f"Error: Failed to install Python dependencies: {e}")
+    elif os.path.exists("pyproject.toml"):
+        print("Installing Python dependencies from pyproject.toml...")
+        try:
+            if os.path.exists("poetry.lock"):
+                subprocess.run(["poetry", "install"], shell=True, check=True)
+            else:
+                subprocess.run([sys.executable, "-m", "pip", "install", "."], check=True)
+            print("\033[32m✓\033[0m Python dependencies installed")
+        except Exception as e:
+            print(f"Error: Failed to install Python dependencies: {e}")
+    
+    # 2. Install widget dependencies
+    if not skip_widgets:
+        widgets_dir = os.path.join(os.getcwd(), "src", "widgets")
+        if os.path.exists(widgets_dir) and os.path.exists(os.path.join(widgets_dir, "package.json")):
+            print("Installing widget dependencies...")
+            try:
+                cmd = ["npm", "install", "--production"] if production else ["npm", "install"]
+                subprocess.run(cmd, cwd=widgets_dir, shell=True, check=True)
+                print("\033[32m✓\033[0m Widget dependencies installed")
+            except Exception as e:
+                print(f"Error: Failed to install widget dependencies: {e}")
 
-def generate_module(name: str):
-    filename = f"{name}_module.py"
-    if os.path.exists(filename):
-        print(f"Error: File '{filename}' already exists.")
+def run_build(output="dist"):
+    print("Building project...")
+    widgets_dir = os.path.join(os.getcwd(), "src", "widgets")
+    if os.path.exists(widgets_dir) and os.path.exists(os.path.join(widgets_dir, "package.json")):
+        print("Building Next.js widgets...")
+        try:
+            subprocess.run(["npm", "run", "build"], cwd=widgets_dir, shell=True, check=True)
+            print("\033[32m✓\033[0m Widgets built successfully")
+        except Exception as e:
+            print(f"Error building widgets: {e}")
+            sys.exit(1)
+    else:
+        print("No widgets directory found to build.")
+
+def run_upgrade(dry_run=False, latest=False):
+    if dry_run:
+        print("Dry run: Checking for upgrades...")
+        print("Would run: pip install --upgrade nitrostack")
+        return
+    
+    print("Upgrading nitrostack...")
+    try:
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "nitrostack"]
+        if latest:
+            cmd.append("--force-reinstall")
+        subprocess.run(cmd, check=True)
+        print("\033[32m✓\033[0m nitrostack upgraded successfully")
+    except Exception as e:
+        print(f"Error upgrading nitrostack: {e}")
         sys.exit(1)
-    camel_name = "".join(part.capitalize() for part in name.split("_"))
-    content = MODULE_TEMPLATE.format(name=name, camel_name=camel_name)
-    with open(filename, "w", encoding="utf-8") as f:
+
+# Generator boilerplate templates mapping
+TEMPLATES = {
+    "middleware": """from nitrostack import ExecutionContext
+from typing import Callable, Any
+
+class {camel_name}:
+    async def use(self, context: ExecutionContext, next_fn: Callable[[], Any]) -> Any:
+        # Use context.logger instead of print — print breaks JSON-RPC over stdio in MCP mode
+        context.logger.info(f"[{context.tool_name}] Started")
+        
+        result = await next_fn()
+        
+        context.logger.info(f"[{context.tool_name}] Completed")
+        return result
+""",
+    "interceptor": """from nitrostack import ExecutionContext
+from typing import Callable, Any
+from datetime import datetime
+
+class {camel_name}:
+    async def intercept(self, context: ExecutionContext, next_fn: Callable[[], Any]) -> Any:
+        result = await next_fn()
+        
+        # Transform response
+        return {{
+            "success": True,
+            "data": result,
+            "timestamp": datetime.utcnow().isoformat()
+        }}
+""",
+    "pipe": """from nitrostack.core.pipeline import PipeMetadata
+from typing import Any
+
+class {camel_name}:
+    async def transform(self, value: Any, metadata: PipeMetadata) -> Any:
+        # Validate
+        if not value:
+            raise ValueError("Value is required")
+        
+        # Transform
+        return value
+""",
+    "filter": """from nitrostack import ExecutionContext
+from datetime import datetime
+
+class {camel_name}:
+    async def catch(self, error: Exception, context: ExecutionContext):
+        error_message = str(error)
+        context.logger.error("Exception caught", extra={{
+            "tool": context.tool_name,
+            "error": error_message
+        }})
+        
+        return {{
+            "error": True,
+            "message": error_message,
+            "timestamp": datetime.utcnow().isoformat()
+        }}
+""",
+    "service": """from nitrostack import injectable
+
+@injectable()
+class {camel_name}:
+    # Add your service methods here
+    
+    async def find_one(self, id: str) -> dict:
+        # TODO: Implement
+        return {{"id": id}}
+        
+    async def find_all(self) -> list:
+        # TODO: Implement
+        return []
+        
+    async def create(self, data: dict) -> dict:
+        # TODO: Implement
+        return {{"id": "1", **data}}
+        
+    async def update(self, id: str, data: dict) -> dict:
+        # TODO: Implement
+        return {{"id": id, **data}}
+        
+    async def delete(self, id: str) -> None:
+        # TODO: Implement
+        pass
+""",
+    "guard": """from nitrostack import ExecutionContext
+
+class {camel_name}:
+    async def can_activate(self, context: ExecutionContext) -> bool:
+        # TODO: Implement your guard logic
+        
+        # Example: Check if user has required role
+        user_role = getattr(context.auth, "role", None)
+        
+        if not user_role:
+            raise ValueError("Authentication required")
+            
+        if user_role != "admin":
+            raise ValueError("Insufficient permissions")
+            
+        return True
+""",
+    "health": """import time
+from nitrostack import health_check
+
+class {camel_name}:
+    def __init__(self):
+        self.start_time = time.time()
+
+    @health_check("{name}")
+    def check_health(self) -> bool:
+        # TODO: Implement health check logic
+        uptime = time.time() - self.start_time
+        return uptime >= 0
+""",
+    "module": """from nitrostack import module
+from modules.{name}.{name}_tools import {camel_name}Tools
+from modules.{name}.{name}_resources import {camel_name}Resources
+from modules.{name}.{name}_prompts import {camel_name}Prompts
+
+@module(
+    name="{name}",
+    controllers=[{camel_name}Tools, {camel_name}Resources, {camel_name}Prompts],
+    providers=[],
+    exports=[]
+)
+class {camel_name}Module:
+    pass
+""",
+    "tools": """from nitrostack import injectable, tool, ExecutionContext
+from pydantic import BaseModel, Field
+
+class {camel_name}ExampleInput(BaseModel):
+    id: str = Field(description="ID parameter")
+
+@injectable()
+class {camel_name}Tools:
+    @tool(
+        name="{name}_example",
+        description="Implement your tool description here",
+        input_schema={camel_name}ExampleInput
+    )
+    async def example_tool(self, input: {camel_name}ExampleInput, context: ExecutionContext):
+        # TODO: Implement tool logic
+        context.logger.info(f"Executing tool {name}_example")
+        return {{"id": input.id, "result": "success"}}
+""",
+    "resources": """from nitrostack import injectable, resource, ExecutionContext
+
+@injectable()
+class {camel_name}Resources:
+    @resource(
+        uri="{name}://example",
+        name="Example Resource",
+        description="Implement your resource description here",
+        mime_type="application/json"
+    )
+    async def example_resource(self, context: ExecutionContext) -> dict:
+        # TODO: Implement resource logic
+        return {{"example": "data"}}
+""",
+    "prompts": """from nitrostack import injectable, prompt, ExecutionContext
+
+@injectable()
+class {camel_name}Prompts:
+    @prompt(
+        name="{name}-help",
+        description="Implement your prompt description here"
+    )
+    async def help_prompt(self, args: dict, context: ExecutionContext) -> str:
+        # TODO: Implement prompt logic
+        return "You are an assistant. Help the user with resources."
+"""
+}
+
+def generate_component(type_name: str, name: str, options):
+    import re
+    
+    # Normalize type name
+    type_name = type_name.lower()
+    
+    # Check special case: tool/module compatibility
+    if type_name == "tool":
+        type_name = "tools"
+    
+    if type_name not in TEMPLATES:
+        print(f"Error: Invalid generator type '{type_name}'.")
+        print(f"Supported types: {', '.join(TEMPLATES.keys())}")
+        sys.exit(1)
+        
+    camel_name = "".join(part.capitalize() for part in name.replace("-", "_").split("_"))
+    snake_name = name.replace("-", "_").lower()
+    
+    # Get path mapping
+    base_path = os.getcwd()
+    
+def generate_types(options):
+    import ast
+    import glob
+    
+    base_path = os.getcwd()
+    output_path = getattr(options, "output", None)
+    if not output_path:
+        widgets_types_dir = os.path.join(base_path, "src", "widgets", "src", "types")
+        if os.path.exists(widgets_types_dir):
+            output_path = os.path.join(widgets_types_dir, "generated-tools.ts")
+        else:
+            output_path = os.path.join(base_path, "src", "types", "generated-tools.ts")
+            
+    print("Scanning for tool definitions...")
+    
+    py_files = []
+    for root, dirs, files in os.walk(base_path):
+        if any(p in root.split(os.sep) for p in ("venv", "env", "__pycache__", ".git", "src")):
+            continue
+        for file in files:
+            if file.endswith(".py") and file != "main.py":
+                py_files.append(os.path.join(root, file))
+                
+    if not py_files:
+        print("No Python files found.")
+        return
+        
+    print(f"Found {len(py_files)} Python file(s).")
+    
+    tool_types = {}
+    
+    for file_path in py_files:
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                source = f.read()
+                
+            tree = ast.parse(source)
+            models = {}
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef):
+                    inherits_base_model = False
+                    for base in node.bases:
+                        if isinstance(base, ast.Name) and base.id == "BaseModel":
+                            inherits_base_model = True
+                        elif isinstance(base, ast.Attribute) and base.attr == "BaseModel":
+                            inherits_base_model = True
+                            
+                    if inherits_base_model:
+                        fields = {}
+                        for item in node.body:
+                            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                                field_name = item.target.id
+                                field_type = "any"
+                                type_map = {
+                                    "str": "string",
+                                    "int": "number",
+                                    "float": "number",
+                                    "bool": "boolean",
+                                    "dict": "Record<string, any>",
+                                    "list": "any[]",
+                                    "Any": "any"
+                                }
+                                if isinstance(item.annotation, ast.Name):
+                                    field_type = type_map.get(item.annotation.id, "any")
+                                elif isinstance(item.annotation, ast.Subscript) and isinstance(item.annotation.value, ast.Name):
+                                    outer_type = item.annotation.value.id
+                                    if outer_type == "Optional":
+                                        if isinstance(item.annotation.slice, ast.Name):
+                                            field_type = type_map.get(item.annotation.slice.id, "any") + " | null"
+                                    elif outer_type in ("List", "list"):
+                                        field_type = "any[]"
+                                    elif outer_type in ("Dict", "dict"):
+                                        field_type = "Record<string, any>"
+                                fields[field_name] = field_type
+                        models[node.name] = fields
+            
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    for decorator in node.decorator_list:
+                        is_tool = False
+                        tool_name = None
+                        input_schema_name = None
+                        
+                        if isinstance(decorator, ast.Call):
+                            if isinstance(decorator.func, ast.Name) and decorator.func.id == "tool":
+                                is_tool = True
+                            elif isinstance(decorator.func, ast.Attribute) and decorator.func.attr == "tool":
+                                is_tool = True
+                                
+                            if is_tool:
+                                for kw in decorator.keywords:
+                                    if kw.arg == "name" and isinstance(kw.value, ast.Constant):
+                                        tool_name = kw.value.value
+                                    elif kw.arg == "input_schema" and isinstance(kw.value, ast.Name):
+                                        input_schema_name = kw.value.id
+                                        
+                        if is_tool and tool_name:
+                            fields = models.get(input_schema_name, {})
+                            tool_types[tool_name] = fields
+        except Exception:
+            pass
+            
+    ts_output = f"""/**
+ * Auto-generated TypeScript types from NitroStack Python tool definitions
+ * DO NOT EDIT THIS FILE MANUALLY
+ * 
+ * Generated by: nitrostack-py generate types
+ * Generated at: {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+ */
+
+export interface ToolInput<T = unknown> {{
+  [key: string]: T;
+}}
+
+export interface ToolOutput<T = unknown> {{
+  [key: string]: T;
+}}
+
+"""
+    for tool_name, fields in tool_types.items():
+        pascal_name = "".join(w.capitalize() for w in tool_name.replace("-", "_").split("_"))
+        ts_output += f"// {tool_name}\n"
+        ts_output += f"export interface {pascal_name}Input {{\n"
+        for f_name, f_type in fields.items():
+            ts_output += f"  {f_name}: {f_type};\n"
+        if not fields:
+            ts_output += "  [key: string]: any;\n"
+        ts_output += "}\n\n"
+        
+    if tool_types:
+        ts_output += f"export type ToolName = { ' | '.join(f'\"{name}\"' for name in tool_types.keys()) };\n\n"
+    else:
+        ts_output += "export type ToolName = string;\n\n"
+        
+    ts_output += "export interface ToolInputs {\n"
+    for tool_name in tool_types.keys():
+        pascal_name = "".join(w.capitalize() for w in tool_name.replace("-", "_").split("_"))
+        ts_output += f"  '{tool_name}': {pascal_name}Input;\n"
+    ts_output += "}\n"
+    
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(ts_output)
+        
+    print(f"\033[32m✓\033[0m Types generated successfully at: {os.path.relpath(output_path, base_path)}")
+
+def generate_component(type_name: str, name: str, options):
+    import re
+    
+    # Normalize type name
+    type_name = type_name.lower()
+    
+    # Special case for types generation
+    if type_name == "types":
+        generate_types(options)
+        return
+        
+    # Check special case: tool/module compatibility
+    if type_name == "tool":
+        type_name = "tools"
+    
+    if type_name not in TEMPLATES:
+        print(f"Error: Invalid generator type '{type_name}'.")
+        print(f"Supported types: {', '.join(TEMPLATES.keys())}, types")
+        sys.exit(1)
+        
+    camel_name = "".join(part.capitalize() for part in name.replace("-", "_").split("_"))
+    snake_name = name.replace("-", "_").lower()
+    
+    # Get path mapping
+    base_path = os.getcwd()
+    
+    # Module specific generation
+    if type_name in ("module", "tools", "resources", "prompts"):
+        module_name = getattr(options, "module", None) or snake_name
+        module_name_snake = module_name.replace("-", "_").lower()
+        
+        # Tools/Resources/Prompts should use suffix
+        suffix_map = {
+            "module": "module",
+            "tools": "tools",
+            "resources": "resources",
+            "prompts": "prompts"
+        }
+        suffix = suffix_map[type_name]
+        filename = f"{module_name_snake}_{suffix}.py"
+        
+        # Put inside modules/<module>
+        dir_path = os.path.join(base_path, "modules", module_name_snake)
+        file_path = os.path.join(dir_path, filename)
+    else:
+        # Other types go to their respective root directories
+        dir_map = {
+            "middleware": "middleware",
+            "interceptor": "interceptors",
+            "pipe": "pipes",
+            "filter": "filters",
+            "service": "services",
+            "guard": "guards",
+            "health": "health"
+        }
+        dir_name = dir_map[type_name]
+        filename = f"{snake_name}.py"
+        dir_path = os.path.join(base_path, dir_name)
+        file_path = os.path.join(dir_path, filename)
+        
+    # Custom output path override
+    if getattr(options, "output", None):
+        file_path = os.path.abspath(options.output)
+        dir_path = os.path.dirname(file_path)
+        
+    # Create dir if not exists
+    if not os.path.exists(dir_path):
+        os.makedirs(dir_path, exist_ok=True)
+        
+    # Check if exists and force option
+    if os.path.exists(file_path) and not getattr(options, "force", False):
+        print(f"Error: File '{file_path}' already exists. Use --force to overwrite.")
+        sys.exit(1)
+        
+    # Build template
+    content = TEMPLATES[type_name].format(name=snake_name, camel_name=camel_name)
+    with open(file_path, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"Generated module boilerplate in '{filename}'")
+        
+    print(f"\033[32m✓\033[0m Created {type_name}: {os.path.relpath(file_path, base_path)}")
+    
+    # If generating module, generate related tools, resources, prompts unless skip-related is set
+    if type_name == "module" and not getattr(options, "skip_related", False):
+        for sub_type in ("tools", "resources", "prompts"):
+            sub_filename = f"{snake_name}_{sub_type}.py"
+            sub_file_path = os.path.join(dir_path, sub_filename)
+            if os.path.exists(sub_file_path) and not getattr(options, "force", False):
+                continue
+            
+            sub_content = TEMPLATES[sub_type].format(name=snake_name, camel_name=camel_name)
+            with open(sub_file_path, "w", encoding="utf-8") as f:
+                f.write(sub_content)
+            print(f"\033[32m✓\033[0m Created {sub_type}: {os.path.relpath(sub_file_path, base_path)}")
 
 def get_claude_config_paths():
     paths = []
@@ -1238,14 +1730,35 @@ def main():
 
     # init command
     init_parser = subparsers.add_parser("init", help="Initialize a new NitroStack MCP server project")
-    init_parser.add_argument("name", help="Name of the project directory to create")
+    init_parser.add_argument("name", nargs="?", default=None, help="Name of the project directory to create")
     init_parser.add_argument("--template", choices=["calculator", "food-delivery", "flight-booking", "starter", "pizzaz", "oauth"], default=None, help="Template to use (default: interactive prompt)")
+    init_parser.add_argument("--description", default=None, help="Description of the project")
+    init_parser.add_argument("--author", default=None, help="Author of the project")
+    init_parser.add_argument("--skip-install", action="store_true", help="Skip installing dependencies")
 
     # dev command
-    subparsers.add_parser("dev", help="Start the hot-reloading development server")
+    dev_parser = subparsers.add_parser("dev", help="Start the hot-reloading development server")
+    dev_parser.add_argument("--file", default="main.py", help="Python script to register (defaults to main.py)")
+    dev_parser.add_argument("--port", type=int, default=3001, help="Port for widget dev server (default: 3001)")
 
     # start command
-    subparsers.add_parser("start", help="Start the production server")
+    start_parser = subparsers.add_parser("start", help="Start the production server")
+    start_parser.add_argument("--file", default="main.py", help="Python script to register (defaults to main.py)")
+    start_parser.add_argument("--port", type=int, default=None, help="Port for server")
+
+    # install command
+    install_parser = subparsers.add_parser("install", aliases=["i"], help="Install dependencies in root and src/widgets directories")
+    install_parser.add_argument("--skip-widgets", action="store_true", help="Skip installing widget dependencies")
+    install_parser.add_argument("--production", action="store_true", help="Install production dependencies only")
+
+    # build command
+    build_parser = subparsers.add_parser("build", help="Build the project for production")
+    build_parser.add_argument("--output", default="dist", help="Output directory")
+
+    # upgrade command
+    upgrade_parser = subparsers.add_parser("upgrade", help="Upgrade nitrostack to the latest version in the project")
+    upgrade_parser.add_argument("--dry-run", action="store_true", help="Show what would be upgraded without making changes")
+    upgrade_parser.add_argument("--latest", action="store_true", help="Force upgrade to the latest version even if already up to date")
 
     # register command
     reg_parser = subparsers.add_parser("register", help="Register server script inside Claude Desktop configuration")
@@ -1253,14 +1766,22 @@ def main():
     reg_parser.add_argument("--file", default="main.py", help="Python script to register (defaults to main.py)")
 
     # generate command
-    gen_parser = subparsers.add_parser("generate", help="Generate boilerplate code")
+    gen_parser = subparsers.add_parser("generate", aliases=["g"], help="Generate boilerplate code")
+    gen_parser.add_argument("--module", help="Module name (for module-specific generation)")
+    gen_parser.add_argument("--output", help="Output path")
+    gen_parser.add_argument("--force", action="store_true", help="Overwrite existing files")
+    gen_parser.add_argument("--skip-related", action="store_true", help="Skip generating related files (for modules)")
     gen_subparsers = gen_parser.add_subparsers(dest="generator")
     
-    tool_parser = gen_subparsers.add_parser("tool", help="Generate a new tool boilerplate")
-    tool_parser.add_argument("name", help="Name of the tool")
-
-    mod_parser = gen_subparsers.add_parser("module", help="Generate a new module boilerplate")
-    mod_parser.add_argument("name", help="Name of the module")
+    # types subparser (without name argument)
+    gen_subparsers.add_parser("types", help="Generate TypeScript definitions from tool definitions")
+    
+    # Generator subcommands (all except types require name)
+    for gen_type in list(TEMPLATES.keys()) + ["tool"]:
+        if gen_type == "types":
+            continue
+        gen_type_parser = gen_subparsers.add_parser(gen_type, help=f"Generate a new {gen_type} boilerplate")
+        gen_type_parser.add_argument("name", help=f"Name of the {gen_type}")
 
     args = parser.parse_args()
 
@@ -1269,21 +1790,25 @@ def main():
         sys.exit(1)
 
     if args.command == "init":
-        init_project(args.name, args.template)
+        init_project(args.name, args.template, args.description, args.author, args.skip_install)
     elif args.command == "dev":
-        run_dev()
+        run_dev(args.file, args.port)
     elif args.command == "start":
-        run_start()
+        run_start(args.file, args.port)
+    elif args.command == "install":
+        run_install(args.skip_widgets, args.production)
+    elif args.command == "build":
+        run_build(args.output)
+    elif args.command == "upgrade":
+        run_upgrade(args.dry_run, args.latest)
     elif args.command == "register":
         register_server(args.name, args.file)
     elif args.command == "generate":
         if not args.generator:
             parser.parse_args(["generate", "--help"])
             sys.exit(1)
-        if args.generator == "tool":
-            generate_tool(args.name)
-        elif args.generator == "module":
-            generate_module(args.name)
+        name = getattr(args, "name", None)
+        generate_component(args.generator, name, args)
 
 if __name__ == "__main__":
     main()

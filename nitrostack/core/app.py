@@ -18,18 +18,63 @@ from nitrostack.events.event_emitter import EventEmitter
 # Monkeypatch FastMCP.call_tool to support returning CreateTaskResult without conversion
 _original_fastmcp_call_tool = FastMCP.call_tool
 
+def handle_tool_error(e: Exception) -> Any:
+    import mcp.types as types
+    import pydantic
+    from nitrostack.core.errors import ValidationError
+
+    # 1. Pydantic v2 ValidationError
+    if isinstance(e, pydantic.ValidationError):
+        errors_details = []
+        for err in e.errors():
+            loc = " -> ".join(str(l) for l in err.get("loc", []))
+            msg = err.get("msg", "Unknown error")
+            errors_details.append(f"Field '{loc}': {msg}")
+        err_msg = "Validation failed:\n" + "\n".join(errors_details)
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=err_msg)],
+            isError=True
+        )
+
+    # 2. SDK custom ValidationError
+    if isinstance(e, ValidationError):
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=f"Validation Error: {str(e)}")],
+            isError=True
+        )
+
+    # 3. PermissionError / Guard auth failures
+    if isinstance(e, PermissionError) or "Access denied" in str(e):
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=f"Access Denied: {str(e)}")],
+            isError=True
+        )
+
+    # 4. Fallback for other exceptions
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=f"Error: {str(e)}")],
+        isError=True
+    )
+
+
 async def _custom_fastmcp_call_tool(self, name: str, arguments: dict[str, Any]):
     t = self._tool_manager.get_tool(name)
     if not t:
         return await _original_fastmcp_call_tool(self, name, arguments)
     context = self.get_context()
-    result = await self._tool_manager.call_tool(
-        name, arguments, context=context, convert_result=False
-    )
-    import mcp.types as types
-    if isinstance(result, types.CreateTaskResult):
-        return result
-    return t.fn_metadata.convert_result(result)
+    try:
+        result = await self._tool_manager.call_tool(
+            name, arguments, context=context, convert_result=False
+        )
+        import mcp.types as types
+        if isinstance(result, types.CreateTaskResult):
+            return result
+        return t.fn_metadata.convert_result(result)
+    except Exception as e:
+        orig_err = e
+        if hasattr(e, "__cause__") and e.__cause__:
+            orig_err = e.__cause__
+        return handle_tool_error(orig_err)
 
 FastMCP.call_tool = _custom_fastmcp_call_tool
 
@@ -82,8 +127,6 @@ def get_pydantic_model(schema: Any) -> Type[BaseModel]:
     
     # Return a default empty model if invalid or empty
     return create_model("EmptyInputModel")
-
-
 class McpApplication:
     def __init__(self, app_class: Type):
         self.app_class = app_class
@@ -160,6 +203,17 @@ class McpApplication:
                 import json
                 results = HealthCheckRegistry.run_all()
                 return json.dumps(results)
+
+        # 4b. Register Built-in Widget Examples Resource if widget-manifest.json exists
+        widget_manifest_path = os.path.join(os.getcwd(), "src", "widgets", "widget-manifest.json")
+        if os.path.exists(widget_manifest_path):
+            @self.mcp_server.resource("widget://examples", name="Widget Examples", description="Provides metadata and examples for all registered UI widgets", mime_type="application/json")
+            def widget_examples_resource() -> str:
+                try:
+                    with open(widget_manifest_path, "r", encoding="utf-8") as f:
+                        return f.read()
+                except Exception as e:
+                    return f'{{"error": "Failed to read manifest: {str(e)}"}}'
 
         # 5. Register Task Support hook & endpoints
         low_level_server = self.mcp_server._mcp_server
@@ -258,6 +312,8 @@ class McpApplication:
                     isError=True
                 )
             else:
+                if isinstance(t.error, types.CallToolResult):
+                    return t.error
                 return types.CallToolResult(
                     content=[types.TextContent(type="text", text=str(t.error or t.status_message))],
                     isError=True
@@ -412,6 +468,11 @@ class McpApplication:
                         elif isinstance(result_dump, dict):
                             if "content" in result_dump and "isError" in result_dump:
                                 final_result = types.CallToolResult(**result_dump)
+                            elif "error" in result_dump:
+                                final_result = types.CallToolResult(
+                                    content=[types.TextContent(type="text", text=str(result_dump.get("message") or result_dump.get("error")))],
+                                    isError=True
+                                )
                             else:
                                 final_result = types.CallToolResult(
                                     content=[types.TextContent(type="text", text=json.dumps(result_dump, indent=2))],
@@ -425,7 +486,8 @@ class McpApplication:
                             )
                         TaskRegistry.complete_task(task_id, final_result)
                     except Exception as e:
-                        TaskRegistry.fail_task(task_id, e)
+                        translated_error = handle_tool_error(e)
+                        TaskRegistry.fail_task(task_id, translated_error)
 
                 import asyncio
                 asyncio.create_task(background_execution())
@@ -459,24 +521,45 @@ class McpApplication:
             filters = getattr(method, "_mcp_filters", [])
 
             # Run through pipeline runner
-            result = await run_pipeline(
-                handler=method,
-                handler_instance=instance,
-                args=(input, ctx),
-                kwargs={},
-                context=ctx,
-                guards=guards,
-                middleware=middleware,
-                interceptors=interceptors,
-                pipes=pipes,
-                filters=filters,
-                param_name="input",
-                param_type=input_model
-            )
+            try:
+                result = await run_pipeline(
+                    handler=method,
+                    handler_instance=instance,
+                    args=(input, ctx),
+                    kwargs={},
+                    context=ctx,
+                    guards=guards,
+                    middleware=middleware,
+                    interceptors=interceptors,
+                    pipes=pipes,
+                    filters=filters,
+                    param_name="input",
+                    param_type=input_model
+                )
 
-            if isinstance(result, BaseModel):
-                return result.model_dump()
-            return result
+                if isinstance(result, BaseModel):
+                    result_dump = result.model_dump()
+                else:
+                    result_dump = result
+
+                import mcp.types as types
+                if isinstance(result_dump, types.CallToolResult):
+                    return result_dump
+                elif isinstance(result_dump, dict):
+                    if "content" in result_dump and "isError" in result_dump:
+                        return types.CallToolResult(**result_dump)
+                    elif "error" in result_dump:
+                        err_msg = result_dump.get("message") or result_dump.get("error")
+                        return types.CallToolResult(
+                            content=[types.TextContent(type="text", text=str(err_msg))],
+                            isError=True
+                        )
+                    else:
+                        return result_dump
+                else:
+                    return result_dump
+            except Exception as e:
+                return handle_tool_error(e)
 
         # Register metadata
         meta = {
