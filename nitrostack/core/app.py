@@ -468,7 +468,7 @@ class McpApplication:
                         elif isinstance(result_dump, dict):
                             if "content" in result_dump and "isError" in result_dump:
                                 final_result = types.CallToolResult(**result_dump)
-                            elif "error" in result_dump:
+                            elif result_dump.get("error") is True:
                                 final_result = types.CallToolResult(
                                     content=[types.TextContent(type="text", text=str(result_dump.get("message") or result_dump.get("error")))],
                                     isError=True
@@ -548,7 +548,7 @@ class McpApplication:
                 elif isinstance(result_dump, dict):
                     if "content" in result_dump and "isError" in result_dump:
                         return types.CallToolResult(**result_dump)
-                    elif "error" in result_dump:
+                    elif result_dump.get("error") is True:
                         err_msg = result_dump.get("message") or result_dump.get("error")
                         return types.CallToolResult(
                             content=[types.TextContent(type="text", text=str(err_msg))],
