@@ -29,3 +29,15 @@ class CircularDependencyError(DIError):
 class ConfigurationError(Exception):
     """Raised when configuration validation fails."""
     pass
+
+class TaskError(Exception):
+    """Base class for task errors."""
+    pass
+
+class TaskNotFoundError(TaskError):
+    """Raised when a requested task is not found."""
+    pass
+
+class TaskAlreadyTerminalError(TaskError):
+    """Raised when trying to mutate a task that is already in a terminal state."""
+    pass

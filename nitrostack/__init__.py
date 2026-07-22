@@ -6,6 +6,7 @@ from nitrostack.core.decorators import (
     prompt,
     initial_tool,
     widget,
+    controller,
     ToolAnnotations,
     ResourceAnnotations,
     PromptArgument,
@@ -13,6 +14,9 @@ from nitrostack.core.decorators import (
     ToolInvocation,
     ToolExamples,
 )
+from nitrostack.core.tool import Tool
+from nitrostack.core.resource import Resource
+from nitrostack.core.prompt import Prompt
 from nitrostack.core.context import (
     ExecutionContext,
     AuthContext,
@@ -64,6 +68,7 @@ from nitrostack.auth.api_key import (
 )
 from nitrostack.auth.jwt import (
     JWTModule,
+    JwtModule,
 )
 from nitrostack.auth.oauth import (
     OAuthModule,
@@ -73,9 +78,36 @@ from nitrostack.auth.config import (
     ConfigModule,
     ConfigService,
 )
+from nitrostack.auth.secret import (
+    SecretValue,
+    unwrap_secret,
+)
+from nitrostack.auth.token_store import (
+    MemoryTokenStore,
+    FileTokenStore,
+    create_default_token_store,
+)
+from nitrostack.auth.client import (
+    OAuth2Client,
+)
+from nitrostack.auth.setup import (
+    setup_jwt_auth,
+    setup_api_key_auth,
+    setup_oauth_auth,
+    setupJWTAuth,
+    setupAPIKeyAuth,
+    setupOAuthAuth,
+)
 from nitrostack.testing import (
     NitroTestingModule,
+    TestingModule,
+    CompiledTestingModule,
+    MockLogger,
+    create_mock_context,
 )
+
+APIKeyModule = ApiKeyModule
+OauthModule = OAuthModule
 
 
 __all__ = [
@@ -84,12 +116,16 @@ __all__ = [
     "prompt",
     "initial_tool",
     "widget",
+    "controller",
     "ToolAnnotations",
     "ResourceAnnotations",
     "PromptArgument",
     "PromptMessage",
     "ToolInvocation",
     "ToolExamples",
+    "Tool",
+    "Resource",
+    "Prompt",
     "ExecutionContext",
     "AuthContext",
     "injectable",
@@ -116,12 +152,31 @@ __all__ = [
     "on_event",
     "EventEmitter",
     "ApiKeyModule",
+    "APIKeyModule",
     "JWTModule",
+    "JwtModule",
     "OAuthModule",
+    "OauthModule",
     "OAuthService",
     "ConfigModule",
     "ConfigService",
+    "SecretValue",
+    "unwrap_secret",
+    "MemoryTokenStore",
+    "FileTokenStore",
+    "create_default_token_store",
+    "OAuth2Client",
+    "setup_jwt_auth",
+    "setup_api_key_auth",
+    "setup_oauth_auth",
+    "setupJWTAuth",
+    "setupAPIKeyAuth",
+    "setupOAuthAuth",
     "NitroTestingModule",
+    "TestingModule",
+    "CompiledTestingModule",
+    "MockLogger",
+    "create_mock_context",
     "TaskContext",
     "TaskCancelledError",
     "TaskRegistry",

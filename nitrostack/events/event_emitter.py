@@ -35,6 +35,23 @@ class EventEmitter:
         bound_func = func.__get__(instance, type(instance))
         self._bound_listeners[event_name].append(bound_func)
 
+    def emit_sync(self, event_name: str, payload: Any) -> None:
+        import asyncio
+        listeners = self._bound_listeners.get(event_name, [])
+        for listener in listeners:
+            try:
+                if inspect.iscoroutinefunction(listener):
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(listener(payload))
+                    except RuntimeError:
+                        pass
+                else:
+                    listener(payload)
+            except Exception as e:
+                sys.stderr.write(f"Event emitter error: handler for '{event_name}' failed: {e}\n")
+                sys.stderr.flush()
+
     async def emit(self, event_name: str, payload: Any) -> None:
         listeners = self._bound_listeners.get(event_name, [])
         for listener in listeners:

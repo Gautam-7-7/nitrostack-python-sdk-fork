@@ -152,7 +152,15 @@ def cache(
                 return cached_val
 
             print(f"[Cache DEBUG] MISS - executing method", file=sys.stderr)
-            result = await func(*args, **kwargs)
+            import inspect
+            import asyncio
+            is_coro = inspect.iscoroutinefunction(func)
+            if not is_coro and hasattr(func, "__call__"):
+                is_coro = inspect.iscoroutinefunction(func.__call__)
+            if is_coro:
+                result = await func(*args, **kwargs)
+            else:
+                result = await asyncio.to_thread(func, *args, **kwargs)
 
             # Store in cache
             active_storage.set(cache_key, result, ttl)
@@ -271,7 +279,15 @@ def rate_limit(
             if context and getattr(context, "logger", None):
                 context.logger.info(f"[RateLimit] Request {count}/{max} for key: {full_key}")
 
-            return await func(*args, **kwargs)
+            import inspect
+            import asyncio
+            is_coro = inspect.iscoroutinefunction(func)
+            if not is_coro and hasattr(func, "__call__"):
+                is_coro = inspect.iscoroutinefunction(func.__call__)
+            if is_coro:
+                return await func(*args, **kwargs)
+            else:
+                return await asyncio.to_thread(func, *args, **kwargs)
 
         copy_mcp_attributes(func, wrapper)
         return wrapper

@@ -178,10 +178,16 @@ async def run_pipeline(
     container = DIContainer.get_instance()
 
     async def execute_handler_flow():
+        import inspect
+        import asyncio
+
         # 1. Run Guards
         for guard_cls in guards:
             guard = container.resolve(guard_cls)
-            can_act = await guard.can_activate(context)
+            if inspect.iscoroutinefunction(guard.can_activate):
+                can_act = await guard.can_activate(context)
+            else:
+                can_act = await asyncio.to_thread(guard.can_activate, context)
             if not can_act:
                 raise PermissionError("Access denied by guard")
 
@@ -193,7 +199,10 @@ async def run_pipeline(
             for pipe_cls in pipes:
                 pipe = container.resolve(pipe_cls)
                 meta = PipeMetadata(param_name=param_name, param_type=param_type)
-                val = await pipe.transform(val, meta)
+                if inspect.iscoroutinefunction(pipe.transform):
+                    val = await pipe.transform(val, meta)
+                else:
+                    val = await asyncio.to_thread(pipe.transform, val, meta)
             current_args[0] = val
 
         # 3. Chain Middleware and Interceptors
@@ -209,13 +218,27 @@ async def run_pipeline(
                 if isinstance(v, ExecutionContext) or type(v).__name__ == "ExecutionContext":
                     target_kwargs[k] = ctx
 
-            import inspect
             if inspect.ismethod(handler):
-                return await handler(*target_args, **target_kwargs)
+                fn = handler
+                fn_args = target_args
+                fn_kwargs = target_kwargs
             elif handler_instance is not None:
-                return await handler(handler_instance, *target_args, **target_kwargs)
+                fn = handler
+                fn_args = [handler_instance] + target_args
+                fn_kwargs = target_kwargs
             else:
-                return await handler(*target_args, **target_kwargs)
+                fn = handler
+                fn_args = target_args
+                fn_kwargs = target_kwargs
+
+            is_coro = inspect.iscoroutinefunction(fn)
+            if not is_coro and hasattr(fn, "__call__"):
+                is_coro = inspect.iscoroutinefunction(fn.__call__)
+
+            if is_coro:
+                return await fn(*fn_args, **fn_kwargs)
+            else:
+                return await asyncio.to_thread(fn, *fn_args, **fn_kwargs)
 
         # We construct the next chain backwards:
         # Middleware -> Interceptors -> Handler
@@ -227,7 +250,10 @@ async def run_pipeline(
                     async def call_next(*a, **k):
                         passed_ctx = a[0] if a else ctx
                         return await nxt(passed_ctx)
-                    return await interceptor.intercept(ctx, call_next)
+                    if inspect.iscoroutinefunction(interceptor.intercept):
+                        return await interceptor.intercept(ctx, call_next)
+                    else:
+                        return await asyncio.to_thread(interceptor.intercept, ctx, call_next)
                 return step
             current_next = make_interceptor_next(current_next)
 
@@ -238,7 +264,10 @@ async def run_pipeline(
                     async def call_next(*a, **k):
                         passed_ctx = a[0] if a else ctx
                         return await nxt(passed_ctx)
-                    return await mw.use(ctx, call_next)
+                    if inspect.iscoroutinefunction(mw.use):
+                        return await mw.use(ctx, call_next)
+                    else:
+                        return await asyncio.to_thread(mw.use, ctx, call_next)
                 return step
             current_next = make_middleware_next(current_next)
 
@@ -253,7 +282,12 @@ async def run_pipeline(
             for filter_cls in filters:
                 filt = container.resolve(filter_cls)
                 try:
-                    return await filt.catch(e, context)
+                    import inspect
+                    import asyncio
+                    if inspect.iscoroutinefunction(filt.catch):
+                        return await filt.catch(e, context)
+                    else:
+                        return await asyncio.to_thread(filt.catch, e, context)
                 except Exception as filter_err:
                     context.logger.error(f"Filter {filter_cls.__name__} failed to handle error: {filter_err}")
             raise e

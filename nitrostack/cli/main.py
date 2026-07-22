@@ -3,6 +3,7 @@ import sys
 import argparse
 import subprocess
 import time
+import json
 
 MAIN_TEMPLATE = """import asyncio
 from nitrostack import McpApplicationFactory
@@ -915,6 +916,13 @@ def init_project(name: str = None, template: str = None, description: str = None
         
     shutil.copytree(template_src_dir, name)
     print("\n\033[32m✓\033[0m Project created")
+
+    # Run skills flow during initialization to populate agent skills
+    try:
+        from nitrostack.cli.skills import run_skills_flow
+        run_skills_flow(force=True, project_dir=name)
+    except Exception as e:
+        print(f"Warning: Failed to setup agent skills: {e}")
     
     # 5. Update .env file
     env_path = os.path.join(name, ".env")
@@ -1176,22 +1184,179 @@ def run_build(output="dist"):
     else:
         print("No widgets directory found to build.")
 
-def run_upgrade(dry_run=False, latest=False):
-    if dry_run:
-        print("Dry run: Checking for upgrades...")
-        print("Would run: pip install --upgrade nitrostack")
-        return
-    
-    print("Upgrading nitrostack...")
+def run_cursor(args):
+    print("Configuring Cursor integration...")
+    is_global = args.is_global
+    is_local = args.is_local
+    if not is_global and not is_local:
+        sys.stdout.write("Where would you like to install the Cursor MCP configuration?\n")
+        print("  1. Project-level (.cursor/mcp.json)")
+        print("  2. Global        (~/.cursor/mcp.json)")
+        sys.stdout.write("Enter choice (1-2) [1]: ")
+        sys.stdout.flush()
+        choice = sys.stdin.readline().strip()
+        if choice == "2":
+            is_global = True
+        else:
+            is_local = True
+
+    config_dir = os.path.expanduser("~") if is_global else os.getcwd()
+    config_file_path = os.path.join(config_dir, ".cursor", "mcp.json")
+
+    conn_type = args.type
+    if not conn_type:
+        print("Choose the connection type for Cursor:")
+        print("  1. Command (Stdio)          - Starts subprocess (recommended for local dev)")
+        print("  2. Legacy SSE (/sse)        - Cursor and older HTTP clients (recommended for Cursor)")
+        print("  3. Streamable HTTP (/mcp)   - MCP Inspector and modern Streamable HTTP clients")
+        sys.stdout.write("Enter choice (1-3) [1]: ")
+        sys.stdout.flush()
+        choice = sys.stdin.readline().strip()
+        if choice == "2":
+            conn_type = "legacy-sse"
+        elif choice == "3":
+            conn_type = "streamable-http"
+        else:
+            conn_type = "command"
+
+    if conn_type == "sse":
+        conn_type = "legacy-sse"
+
+    port = args.port or "8000"
+    url = args.url
+    if conn_type in ("legacy-sse", "streamable-http") and not url:
+        default_url = f"http://localhost:{port}/sse" if conn_type == "legacy-sse" else f"http://localhost:{port}/mcp"
+        sys.stdout.write(f"HTTP connection URL [{default_url}]: ")
+        sys.stdout.flush()
+        url = sys.stdin.readline().strip() or default_url
+
+    server_name = os.path.basename(os.getcwd())
+    pyproject_path = os.path.join(os.getcwd(), "pyproject.toml")
+    if os.path.exists(pyproject_path):
+        try:
+            with open(pyproject_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("name ="):
+                        server_name = line.split("=")[1].strip().replace('"', '').replace("'", "")
+                        break
+        except Exception:
+            pass
+
+    if conn_type == "command":
+        entry = {
+            "command": sys.executable,
+            "args": [os.path.abspath(args.file or "main.py")],
+            "env": {}
+        }
+    else:
+        entry = {
+            "url": url
+        }
+
     try:
-        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "nitrostack"]
-        if latest:
-            cmd.append("--force-reinstall")
-        subprocess.run(cmd, check=True)
-        print("\033[32m✓\033[0m nitrostack upgraded successfully")
+        os.makedirs(os.path.dirname(config_file_path), exist_ok=True)
+        mcp_config = {"mcpServers": {}}
+        if os.path.exists(config_file_path):
+            try:
+                with open(config_file_path, "r", encoding="utf-8") as f:
+                    mcp_config = json.load(f)
+            except Exception:
+                mcp_config = {"mcpServers": {}}
+
+        if "mcpServers" not in mcp_config:
+            mcp_config["mcpServers"] = {}
+
+        if server_name in mcp_config["mcpServers"] and not args.force:
+            sys.stdout.write(f"Server '{server_name}' already exists in configuration. Overwrite? (y/n) [n]: ")
+            sys.stdout.flush()
+            ans = sys.stdin.readline().strip().lower()
+            if ans not in ("y", "yes"):
+                print("Aborted.")
+                return
+
+        mcp_config["mcpServers"][server_name] = entry
+        with open(config_file_path, "w", encoding="utf-8") as f:
+            json.dump(mcp_config, f, indent=2)
+
+        print(f"\033[32m✓\033[0m Successfully configured server '{server_name}' in: {config_file_path}")
     except Exception as e:
-        print(f"Error upgrading nitrostack: {e}")
-        sys.exit(1)
+        print(f"Error configuring Cursor: {e}")
+
+def run_upgrade(dry_run=False, latest=False):
+    import urllib.request
+    import json
+    import nitrostack
+    
+    local_version = getattr(nitrostack, "__version__", "0.0.0")
+    if local_version == "0.0.0":
+        pyproject_path = os.path.join(os.getcwd(), "pyproject.toml")
+        if os.path.exists(pyproject_path):
+            try:
+                with open(pyproject_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.startswith("version ="):
+                            local_version = line.split("=")[1].strip().replace('"', '').replace("'", "")
+                            break
+            except Exception:
+                pass
+
+    print(f"Current local version: {local_version}")
+    print("Checking PyPI for updates...")
+    
+    pypi_version = None
+    try:
+        req = urllib.request.Request("https://pypi.org/pypi/nitrostack/json", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            pypi_data = json.loads(r.read().decode("utf-8"))
+            pypi_version = pypi_data["info"]["version"]
+    except Exception as e:
+        print(f"Warning: Failed to fetch latest version from PyPI: {e}")
+
+    has_package_update = False
+    if pypi_version and pypi_version != local_version:
+        has_package_update = True
+
+    if dry_run:
+        print("\n[Dry Run Mode] Updates check:")
+        if has_package_update:
+            print(f"  • nitrostack package: {local_version} -> {pypi_version} (Available)")
+        else:
+            print("  • nitrostack package: Up to date")
+            
+        local_skills = "0.0.0"
+        pyproject_path = os.path.join(os.getcwd(), "pyproject.toml")
+        if os.path.exists(pyproject_path):
+            try:
+                with open(pyproject_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    import re
+                    match = re.search(r'skills_version\s*=\s*"(.*?)"', content)
+                    if match:
+                        local_skills = match.group(1)
+            except Exception:
+                pass
+        print(f"  • Local agent skills version: {local_skills}")
+        print("Would upgrade to latest on non-dry run.")
+        return
+
+    if has_package_update or latest:
+        target_version = pypi_version or "latest"
+        print(f"Upgrading nitrostack package ({local_version} -> {target_version})...")
+        try:
+            cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "nitrostack"]
+            if latest:
+                cmd.append("--force-reinstall")
+            subprocess.run(cmd, check=True)
+            print("\033[32m✓\033[0m nitrostack package upgraded successfully")
+        except Exception as e:
+            print(f"Error upgrading nitrostack: {e}")
+            sys.exit(1)
+    else:
+        print("nitrostack package is already up to date.")
+
+    from nitrostack.cli.skills import run_skills_flow
+    run_skills_flow(force=True, project_dir=os.getcwd())
+    print("\033[32m✓\033[0m Agent skills upgraded successfully")
 
 # Generator boilerplate templates mapping
 TEMPLATES = {
@@ -1760,6 +1925,16 @@ def main():
     upgrade_parser.add_argument("--dry-run", action="store_true", help="Show what would be upgraded without making changes")
     upgrade_parser.add_argument("--latest", action="store_true", help="Force upgrade to the latest version even if already up to date")
 
+    # cursor command
+    cursor_parser = subparsers.add_parser("cursor", aliases=["c"], help="Integrate this MCP server with Cursor")
+    cursor_parser.add_argument("-g", "--global", action="store_true", dest="is_global", help="Install globally to ~/.cursor/mcp.json")
+    cursor_parser.add_argument("-l", "--local", action="store_true", dest="is_local", help="Install locally to .cursor/mcp.json")
+    cursor_parser.add_argument("-t", "--type", choices=["command", "legacy-sse", "streamable-http", "sse"], default=None, help="Connection type: command, legacy-sse, or streamable-http")
+    cursor_parser.add_argument("-u", "--url", default=None, help="HTTP connection URL")
+    cursor_parser.add_argument("-p", "--port", default="8000", help="Port for default HTTP URL")
+    cursor_parser.add_argument("--file", default="main.py", help="Python script to register (defaults to main.py)")
+    cursor_parser.add_argument("--force", action="store_true", help="Force overwrite of existing configuration")
+
     # register command
     reg_parser = subparsers.add_parser("register", help="Register server script inside Claude Desktop configuration")
     reg_parser.add_argument("--name", default=os.path.basename(os.getcwd()), help="Name of the server (defaults to folder name)")
@@ -1789,26 +1964,74 @@ def main():
         parser.print_help()
         sys.exit(1)
 
+    import atexit
+    from nitrostack.cli.analytics import track_event, shutdown_analytics
+    atexit.register(shutdown_analytics)
+
+    track_event("cli_command_invoked", {
+        "command": args.command,
+        "arguments": sys.argv[1:]
+    })
+
     if args.command == "init":
-        init_project(args.name, args.template, args.description, args.author, args.skip_install)
+        try:
+            init_project(args.name, args.template, args.description, args.author, args.skip_install)
+            track_event("cli_init_completed", {"name": args.name, "template": args.template})
+        except Exception as e:
+            track_event("cli_init_failed", {"name": args.name, "template": args.template, "error": str(e)})
+            raise
     elif args.command == "dev":
+        track_event("cli_dev_started", {"file": args.file, "port": args.port})
         run_dev(args.file, args.port)
     elif args.command == "start":
+        track_event("cli_start_executed", {"file": args.file, "port": args.port})
         run_start(args.file, args.port)
     elif args.command == "install":
-        run_install(args.skip_widgets, args.production)
+        try:
+            run_install(args.skip_widgets, args.production)
+            track_event("cli_install_completed", {"skip_widgets": args.skip_widgets, "production": args.production})
+        except Exception as e:
+            track_event("cli_install_failed", {"skip_widgets": args.skip_widgets, "production": args.production, "error": str(e)})
+            raise
     elif args.command == "build":
-        run_build(args.output)
+        try:
+            run_build(args.output)
+            track_event("cli_build_completed", {"output": args.output})
+        except Exception as e:
+            track_event("cli_build_failed", {"output": args.output, "error": str(e)})
+            raise
     elif args.command == "upgrade":
-        run_upgrade(args.dry_run, args.latest)
+        try:
+            run_upgrade(args.dry_run, args.latest)
+            track_event("cli_upgrade_completed", {"dry_run": args.dry_run, "latest": args.latest})
+        except Exception as e:
+            track_event("cli_upgrade_failed", {"dry_run": args.dry_run, "latest": args.latest, "error": str(e)})
+            raise
+    elif args.command == "cursor":
+        try:
+            run_cursor(args)
+            track_event("cli_cursor_completed", {"global": args.is_global, "local": args.is_local})
+        except Exception as e:
+            track_event("cli_cursor_failed", {"global": args.is_global, "local": args.is_local, "error": str(e)})
+            raise
     elif args.command == "register":
-        register_server(args.name, args.file)
+        try:
+            register_server(args.name, args.file)
+            track_event("cli_register_completed", {"name": args.name, "file": args.file})
+        except Exception as e:
+            track_event("cli_register_failed", {"name": args.name, "file": args.file, "error": str(e)})
+            raise
     elif args.command == "generate":
         if not args.generator:
             parser.parse_args(["generate", "--help"])
             sys.exit(1)
         name = getattr(args, "name", None)
-        generate_component(args.generator, name, args)
+        try:
+            generate_component(args.generator, name, args)
+            track_event("cli_generate_completed", {"generator": args.generator, "name": name})
+        except Exception as e:
+            track_event("cli_generate_failed", {"generator": args.generator, "name": name, "error": str(e)})
+            raise
 
 if __name__ == "__main__":
     main()

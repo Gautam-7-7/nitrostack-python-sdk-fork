@@ -146,36 +146,27 @@ class OAuthService:
             # A real deployment must provide an introspection endpoint.
             sys.stderr.write("OAuth Warning: No token_introspection_endpoint configured. Assuming mock active.\n")
             return {"active": True, "scope": " ".join(self.scopes_supported), "sub": "mock-user"}
-
-        # Perform HTTP POST request
-        data = urllib.parse.urlencode({"token": token}).encode("utf-8")
-        req = urllib.request.Request(self.token_introspection_endpoint, data=data, method="POST")
-        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        import httpx
         
-        # Add basic auth if client credentials provided
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        auth = None
         if self.token_introspection_client_id and self.token_introspection_client_secret:
-            import base64
-            auth_str = f"{self.token_introspection_client_id}:{self.token_introspection_client_secret}"
-            encoded_auth = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
-            req.add_header("Authorization", f"Basic {encoded_auth}")
-
+            auth = (self.token_introspection_client_id, self.token_introspection_client_secret)
+            
         try:
-            # We run in a threadpool or run_in_executor to avoid blocking async loop
-            # But standard library urllib.request is synchronous, so let's run it synchronously in context
-            # (or use asyncio loop.run_in_executor if we are in async method).
-            import asyncio
-            loop = asyncio.get_event_loop()
-            
-            def do_request():
-                with urllib.request.urlopen(req, timeout=5) as response:
-                    return json.loads(response.read().decode("utf-8"))
-            
-            return await loop.run_in_executor(None, do_request)
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                res = await client.post(
+                    self.token_introspection_endpoint,
+                    data={"token": token},
+                    headers=headers,
+                    auth=auth
+                )
+                res.raise_for_status()
+                return res.json()
         except Exception as e:
             sys.stderr.write(f"OAuth Introspection Request Failed: {e}\n")
             sys.stderr.flush()
             return {"active": False}
-
 @module(name="OAuthModule")
 class OAuthModule:
     @classmethod

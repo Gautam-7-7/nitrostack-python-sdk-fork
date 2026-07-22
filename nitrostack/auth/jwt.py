@@ -1,9 +1,7 @@
 import time
 import json
-import hmac
-import hashlib
-import base64
 import os
+import jwt
 from typing import Any, Dict, Optional
 from nitrostack.core.module import module
 from nitrostack.core.di import DIContainer
@@ -12,16 +10,21 @@ class JWTService:
     def __init__(
         self,
         secret_env_var: str = "JWT_SECRET",
+        secret_key: Optional[str] = None,
+        secret: Optional[str] = None,
         expires_in: str = "24h",
         audience: Optional[str] = None,
         issuer: Optional[str] = None,
     ):
         self.secret_env_var = secret_env_var
+        self.secret_key = secret_key or secret
         self.expires_in = expires_in
         self.audience = audience
         self.issuer = issuer
 
     def get_secret(self) -> str:
+        if self.secret_key:
+            return self.secret_key
         secret = os.environ.get(self.secret_env_var)
         if not secret:
             # Fallback for dev mode/testing so it doesn't fail hard if not set
@@ -54,58 +57,29 @@ class JWTService:
         if "iat" not in payload_copy:
             payload_copy["iat"] = int(time.time())
 
-        header = {"alg": "HS256", "typ": "JWT"}
-
-        def b64url_encode(data: bytes) -> str:
-            return base64.urlsafe_b64encode(data).rstrip(b'=').decode('utf-8')
-
-        header_b64 = b64url_encode(json.dumps(header).encode('utf-8'))
-        payload_b64 = b64url_encode(json.dumps(payload_copy).encode('utf-8'))
-        
-        signature_base = f"{header_b64}.{payload_b64}".encode('utf-8')
-        secret = self.get_secret().encode('utf-8')
-        signature = hmac.new(secret, signature_base, hashlib.sha256).digest()
-        signature_b64 = b64url_encode(signature)
-        
-        return f"{header_b64}.{payload_b64}.{signature_b64}"
+        secret = self.get_secret()
+        return jwt.encode(payload_copy, secret, algorithm="HS256")
 
     def verify_token(self, token: str) -> Dict[str, Any]:
-        parts = token.split(".")
-        if len(parts) != 3:
-            raise ValueError("Invalid JWT format.")
-
-        header_b64, payload_b64, signature_b64 = parts
-
-        def b64url_decode(s: str) -> bytes:
-            padding = '=' * (4 - len(s) % 4)
-            return base64.urlsafe_b64decode(s + padding)
-
-        # Recompute signature
-        signature_base = f"{header_b64}.{payload_b64}".encode('utf-8')
-        secret = self.get_secret().encode('utf-8')
-        expected_sig = hmac.new(secret, signature_base, hashlib.sha256).digest()
-        
-        padding = '=' * (4 - len(signature_b64) % 4)
-        actual_sig = base64.urlsafe_b64decode(signature_b64 + padding)
-
-        if not hmac.compare_digest(actual_sig, expected_sig):
-            raise ValueError("Invalid signature.")
-
-        payload = json.loads(b64url_decode(payload_b64).decode('utf-8'))
-
-        # Check expiration
-        if "exp" in payload and payload["exp"] < time.time():
-            raise ValueError("Token has expired.")
-
-        # Check audience
-        if self.audience and payload.get("aud") != self.audience:
-            raise ValueError("Audience mismatch.")
-
-        # Check issuer
-        if self.issuer and payload.get("iss") != self.issuer:
-            raise ValueError("Issuer mismatch.")
-
-        return payload
+        secret = self.get_secret()
+        try:
+            return jwt.decode(
+                token,
+                secret,
+                algorithms=["HS256"],
+                audience=self.audience,
+                issuer=self.issuer
+            )
+        except jwt.ExpiredSignatureError as e:
+            raise ValueError("Token has expired.") from e
+        except jwt.InvalidAudienceError as e:
+            raise ValueError("Audience mismatch.") from e
+        except jwt.InvalidIssuerError as e:
+            raise ValueError("Issuer mismatch.") from e
+        except jwt.InvalidTokenError as e:
+            raise ValueError("Invalid signature.") from e
+        except Exception as e:
+            raise ValueError(f"Invalid token: {e}") from e
 
 @module(name="JWTModule")
 class JWTModule:
@@ -113,15 +87,23 @@ class JWTModule:
     def for_root(
         cls,
         secret_env_var: str = "JWT_SECRET",
+        secret_key: Optional[str] = None,
+        secret: Optional[str] = None,
         expires_in: str = "24h",
         audience: Optional[str] = None,
         issuer: Optional[str] = None,
+        algorithms: Optional[Any] = None,
     ):
         service = JWTService(
             secret_env_var=secret_env_var,
+            secret_key=secret_key,
+            secret=secret,
             expires_in=expires_in,
             audience=audience,
             issuer=issuer
         )
         DIContainer.get_instance().register_value(JWTService, service)
         return cls
+
+JwtModule = JWTModule
+

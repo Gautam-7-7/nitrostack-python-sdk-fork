@@ -1,0 +1,6 @@
+# Exclude Node.js and Next.js build directories in templates from being packaged
+prune nitrostack/templates/**/node_modules
+prune nitrostack/templates/**/.next
+prune nitrostack/templates/**/out
+global-exclude *.pyc
+global-exclude __pycache__

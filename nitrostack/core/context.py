@@ -11,6 +11,31 @@ class Logger(Protocol):
     def warn(self, message: str, meta: dict | None = None) -> None: ...
     def error(self, message: str, meta: dict | None = None) -> None: ...
 
+import datetime
+import json
+
+class EventEmitterHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            info = {
+                "level": record.levelname.lower(),
+                "message": record.getMessage(),
+                "timestamp": datetime.datetime.fromtimestamp(record.created, datetime.timezone.utc).isoformat(),
+            }
+            if hasattr(record, "meta") and isinstance(record.meta, dict):
+                info.update(record.meta)
+            
+            try:
+                from nitrostack.events.event_emitter import EventEmitter
+                EventEmitter.get_instance().emit_sync("log", info)
+            except Exception:
+                pass
+
+            sys.stderr.write(f"NITRO_LOG::{json.dumps(info)}\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
+
 class FileLogger:
     """
     Logger implementation that writes to a file or stdout/stderr based on transport settings.
@@ -19,18 +44,19 @@ class FileLogger:
     def __init__(self, log_file: Optional[str] = None, name: str = "nitrostack"):
         self.logger = logging.getLogger(name)
         
-        # Read log level from environment
         level_str = os.environ.get("NITROSTACK_LOG_LEVEL", "DEBUG").upper()
         level = getattr(logging, level_str, logging.DEBUG)
         self.logger.setLevel(level)
         
-        # Avoid adding duplicate handlers if initialized multiple times
-        if not self.logger.handlers:
+        has_ee_handler = any(isinstance(h, EventEmitterHandler) for h in self.logger.handlers)
+        if not has_ee_handler:
+            self.logger.addHandler(EventEmitterHandler())
+            
+        if not [h for h in self.logger.handlers if not isinstance(h, EventEmitterHandler)]:
             formatter = logging.Formatter(
                 '%(asctime)s [%(levelname)s] (%(name)s): %(message)s'
             )
             
-            # Check if stdout logging is explicitly requested or safe (e.g. HTTP transport)
             log_to_stdout = (
                 os.environ.get("NITROSTACK_LOG_TO_STDOUT", "false").lower() == "true"
                 or os.environ.get("MCP_TRANSPORT_TYPE") == "http"
@@ -42,7 +68,6 @@ class FileLogger:
                 sh.setFormatter(formatter)
                 self.logger.addHandler(sh)
             else:
-                # Determine log file path
                 target_file = log_file or os.environ.get("NITROSTACK_LOG_FILE", "nitrostack.log")
                 try:
                     fh = logging.FileHandler(target_file, encoding='utf-8')
@@ -50,11 +75,7 @@ class FileLogger:
                     fh.setFormatter(formatter)
                     self.logger.addHandler(fh)
                 except Exception:
-                    # Fallback to sys.stderr to avoid stdout pollution in stdio transport
-                    sh = logging.StreamHandler(sys.stderr)
-                    sh.setLevel(level)
-                    sh.setFormatter(formatter)
-                    self.logger.addHandler(sh)
+                    pass
                 
     def _format_message(self, message: str, meta: dict | None = None) -> str:
         if meta:
@@ -62,16 +83,16 @@ class FileLogger:
         return message
 
     def debug(self, message: str, meta: dict | None = None) -> None:
-        self.logger.debug(self._format_message(message, meta))
+        self.logger.debug(self._format_message(message, meta), extra={"meta": meta})
 
     def info(self, message: str, meta: dict | None = None) -> None:
-        self.logger.info(self._format_message(message, meta))
+        self.logger.info(self._format_message(message, meta), extra={"meta": meta})
 
     def warn(self, message: str, meta: dict | None = None) -> None:
-        self.logger.warning(self._format_message(message, meta))
+        self.logger.warning(self._format_message(message, meta), extra={"meta": meta})
 
     def error(self, message: str, meta: dict | None = None) -> None:
-        self.logger.error(self._format_message(message, meta))
+        self.logger.error(self._format_message(message, meta), extra={"meta": meta})
 
 @dataclass
 class AuthContext:
@@ -93,7 +114,30 @@ class TaskContext:
     def __init__(self, task_id: str):
         self.task_id = task_id
         self.progress_message: str = ""
-        self.is_cancelled: bool = False
+
+    @property
+    def is_cancelled(self) -> bool:
+        try:
+            from nitrostack.core.task import TaskRegistry
+            return TaskRegistry.is_task_cancelled(self.task_id)
+        except Exception:
+            return False
+
+    @property
+    def abort_signal(self) -> Any:
+        try:
+            from nitrostack.core.task import TaskRegistry
+            entry = TaskRegistry.get_task(self.task_id)
+            if entry:
+                return entry.abort_controller.signal
+        except Exception:
+            pass
+        from nitrostack.core.task import AbortSignal
+        return AbortSignal()
+
+    @property
+    def abortSignal(self) -> Any:
+        return self.abort_signal
 
     def update_progress(self, message: str) -> None:
         self.progress_message = message
@@ -104,7 +148,6 @@ class TaskContext:
             pass
 
     def cancel(self) -> None:
-        self.is_cancelled = True
         try:
             from nitrostack.core.task import TaskRegistry
             TaskRegistry.cancel_task(self.task_id)
@@ -112,12 +155,6 @@ class TaskContext:
             pass
 
     def throw_if_cancelled(self) -> None:
-        try:
-            from nitrostack.core.task import TaskRegistry
-            if TaskRegistry.is_task_cancelled(self.task_id):
-                self.is_cancelled = True
-        except Exception:
-            pass
         if self.is_cancelled:
             raise TaskCancelledError(f"Task {self.task_id} has been cancelled.")
 
